@@ -1,18 +1,20 @@
-import { AutomaticSpeechRecognitionPipeline } from '@huggingface/transformers';
+import type { AutomaticSpeechRecognitionPipeline } from '@huggingface/transformers';
+
+export type WhisperModel = AutomaticSpeechRecognitionPipeline;
+
+export interface WhisperModelRef {
+  current: WhisperModel | null;
+}
 
 export interface WhisperResult {
   text: string;
-  [key: string]: unknown;
+  timestamp: number;
 }
 
-export interface AudioProcessingConfig {
-  sampleRate: number;
-}
-
-export interface WhisperConfig {
-  chunkLengthSeconds: number;
-  strideLengthSeconds: number;
-  language: string;
+export interface AudioRefs {
+  audioContext: AudioContext | null;
+  processorNode: AudioWorkletNode | null;
+  audioBuffer: Float32Array[];
 }
 
 export interface ProcessingStatus {
@@ -20,12 +22,5 @@ export interface ProcessingStatus {
   error?: string;
 }
 
-export type WhisperModelRef = {
-  current: AutomaticSpeechRecognitionPipeline | null;
-};
-
-export type AudioRefs = {
-  audioContext: AudioContext | null;
-  processorNode: AudioWorkletNode | null;
-  audioBuffer: number[];
-};
+// 音声の状態を表す型
+export type AudioState = 'silent' | 'active' | 'inactive';
