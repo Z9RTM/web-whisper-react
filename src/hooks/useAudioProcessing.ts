@@ -1,9 +1,10 @@
 import { useRef, useState, useCallback } from 'react';
-import { AudioRefs, ProcessingStatus } from '@/types/whisper';
+import { AudioRefs, ProcessingStatus, AudioState } from '@/types/whisper';
 import { AUDIO_CONFIG, ERROR_MESSAGES } from '@/config/whisper';
 
 export const useAudioProcessing = (onAudioProcess: (audio: Float32Array, timestamp: number) => Promise<void>) => {
   const [status, setStatus] = useState<ProcessingStatus>({ status: '' });
+  const [audioState, setAudioState] = useState<AudioState>('inactive');
   const audioRefs = useRef<AudioRefs>({
     audioContext: null,
     processorNode: null,
@@ -49,8 +50,14 @@ export const useAudioProcessing = (onAudioProcess: (audio: Float32Array, timesta
 
       audioRefs.current.processorNode.port.onmessage = async (e: MessageEvent<{ audio: Float32Array; timestamp: number }>) => {
         const { audio, timestamp } = e.data;
+        setAudioState('active'); // 音声データを受信したら active に設定
         const processedAudio = preprocessAudio(audio);
         await onAudioProcess(processedAudio, timestamp);
+        
+        // 1秒後に無音状態に戻す（次のデータが来ない場合）
+        setTimeout(() => {
+          setAudioState('silent');
+        }, 1000);
       };
 
       source.connect(audioRefs.current.processorNode);
@@ -79,5 +86,6 @@ export const useAudioProcessing = (onAudioProcess: (audio: Float32Array, timesta
     setupAudioProcessing,
     stopAudioProcessing,
     status,
+    audioState,
   };
 };
