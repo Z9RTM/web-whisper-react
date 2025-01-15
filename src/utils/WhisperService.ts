@@ -46,12 +46,16 @@ class WhisperService {
       }
 
       // Load processor and model
-      const processor = await AutoProcessor.from_pretrained('openai/whisper-small');
+      const processor = await AutoProcessor.from_pretrained('openai/whisper-small', {
+        quantized: true
+      });
       if (this.progressCallback) {
         this.progressCallback({ status: 'progress', progress: 50 });
       }
 
-      const model = await AutoModelForSpeechSeq2Seq.from_pretrained('openai/whisper-small');
+      const model = await AutoModelForSpeechSeq2Seq.from_pretrained('openai/whisper-small', {
+        quantized: true
+      });
       if (this.progressCallback) {
         this.progressCallback({ status: 'progress', progress: 90 });
       }
