@@ -58,7 +58,6 @@ class WhisperService {
           model_type: "whisper",
           is_encoder_decoder: true,
           max_position_embeddings: 1500,
-          use_safetensors: true,
           "transformers.js_config": true,
           normalized_config: true
         }
