@@ -1,10 +1,6 @@
 import { WHISPER_CONFIG } from '@/config/whisper';
 import { WhisperResult } from '@/types/whisper';
-import { pipeline, env } from '@xenova/transformers';
-
-// Configure transformers.js
-env.allowLocalModels = false;
-env.useBrowserCache = true;
+import { AutoProcessor, AutoModelForSpeechSeq2Seq, pipeline } from '@huggingface/transformers';
 
 type ProgressCallback = (progress: { status: string; progress?: number }) => void;
 
@@ -44,20 +40,36 @@ class WhisperService {
   private async doInitialize(): Promise<void> {
     try {
       console.log('Initializing Whisper pipeline...');
+      
+      if (this.progressCallback) {
+        this.progressCallback({ status: 'progress', progress: 0 });
+      }
+
+      // Load processor and model
+      const processor = await AutoProcessor.from_pretrained('openai/whisper-small');
+      if (this.progressCallback) {
+        this.progressCallback({ status: 'progress', progress: 50 });
+      }
+
+      const model = await AutoModelForSpeechSeq2Seq.from_pretrained('openai/whisper-small');
+      if (this.progressCallback) {
+        this.progressCallback({ status: 'progress', progress: 90 });
+      }
+
+      // Create pipeline
       this.whisperPipeline = await pipeline(
         'automatic-speech-recognition',
-        'Xenova/whisper-small',
         {
-          progress_callback: (progress: { status: string; progress?: number }) => {
-            if (this.progressCallback && progress.status === 'progress' && progress.progress !== undefined) {
-              this.progressCallback({
-                status: 'progress',
-                progress: Math.round(progress.progress)
-              });
-            }
-          }
+          model,
+          tokenizer: processor.tokenizer,
+          feature_extractor: processor.feature_extractor,
         }
       );
+
+      if (this.progressCallback) {
+        this.progressCallback({ status: 'progress', progress: 100 });
+      }
+
       console.log('Pipeline initialized successfully');
     } catch (error) {
       console.error('Failed to initialize Whisper pipeline:', error);
@@ -77,6 +89,7 @@ class WhisperService {
         stride_length_s: WHISPER_CONFIG.strideLengthSeconds,
         language: WHISPER_CONFIG.language,
         return_timestamps: true,
+        task: 'transcribe',
       });
 
       console.log('Audio processing complete');

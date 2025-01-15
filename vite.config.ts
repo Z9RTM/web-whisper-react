@@ -22,12 +22,19 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
-          transformers: ['@xenova/transformers'],
+          transformers: ['@huggingface/transformers'],
         },
       },
     },
   },
   optimizeDeps: {
-    exclude: ['@xenova/transformers'],
+    include: ['@huggingface/transformers'],
+    esbuildOptions: {
+      target: 'es2020',
+    },
+  },
+  define: {
+    'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV),
+    'process.env.HF_ENDPOINT': JSON.stringify(process.env.HF_ENDPOINT || 'https://huggingface.co'),
   },
 })
