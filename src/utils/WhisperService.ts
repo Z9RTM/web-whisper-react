@@ -73,7 +73,7 @@ class WhisperService {
       // Create pipeline
       this.whisperPipeline = await pipeline(
         'automatic-speech-recognition',
-        model,
+        'openai/whisper-small',
         {
           progress_callback: (progress: { status: string; progress?: number }) => {
             if (this.progressCallback) {
