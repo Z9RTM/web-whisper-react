@@ -1,8 +1,9 @@
-import { pipeline } from '@huggingface/transformers';
+import { pipeline, WhisperTextStreamer } from '@huggingface/transformers';
 import { WHISPER_CONFIG } from '@/config/whisper';
-import { WhisperResult } from '@/types/whisper';
+import { WhisperResult, WhisperChunk } from '@/types/whisper';
 
 let whisperPipeline: any = null;
+let chunkCount = 0;
 
 // Worker message types
 type InitMessage = {
@@ -55,15 +56,86 @@ async function processAudio(audioData: Float32Array) {
   }
 
   try {
+    const time_precision = whisperPipeline.processor.feature_extractor.config.chunk_length / 
+                          whisperPipeline.model.config.max_source_positions;
+
+    // Storage for chunks to be processed
+    const chunks: WhisperChunk[] = [];
+    let startTime: number | null = null;
+    let numTokens = 0;
+    let tps: number | undefined;
+
+    // Create streamer for real-time transcription
+    const streamer = new WhisperTextStreamer(whisperPipeline.tokenizer, {
+      time_precision,
+      on_chunk_start: (timestamp: number) => {
+        const offset = (WHISPER_CONFIG.chunkLengthSeconds - WHISPER_CONFIG.strideLengthSeconds) * chunkCount;
+        chunks.push({
+          text: '',
+          timestamp: [offset + timestamp, null],
+          finalised: false,
+          offset,
+        });
+      },
+      token_callback_function: () => {
+        startTime ??= performance.now();
+        if (numTokens++ > 0) {
+          tps = (numTokens / (performance.now() - startTime)) * 1000;
+        }
+      },
+      callback_function: (text: string) => {
+        if (chunks.length === 0) return;
+        // Append text to the last chunk
+        chunks[chunks.length - 1].text += text;
+
+        self.postMessage({
+          type: 'progress',
+          progress: {
+            status: 'update',
+            data: {
+              text: '', // Full text will be sent on completion
+              chunks,
+              tps,
+            }
+          }
+        });
+      },
+      on_chunk_end: (timestamp: number) => {
+        const current = chunks[chunks.length - 1];
+        current.timestamp[1] = timestamp + current.offset;
+        current.finalised = true;
+      },
+      on_finalize: () => {
+        startTime = null;
+        numTokens = 0;
+        ++chunkCount;
+      },
+    });
+
+    // Run transcription
     const result = await whisperPipeline(audioData, {
+      top_k: 0,
+      do_sample: false,
       chunk_length_s: WHISPER_CONFIG.chunkLengthSeconds,
       stride_length_s: WHISPER_CONFIG.strideLengthSeconds,
       language: WHISPER_CONFIG.language,
-      return_timestamps: true,
       task: 'transcribe',
+      return_timestamps: true,
+      force_full_sequences: false,
+      streamer,
     });
 
-    self.postMessage({ type: 'transcribe_complete', result });
+    // Combine all chunk texts for the final result
+    const fullText = chunks.map(chunk => chunk.text).join(' ').trim();
+
+    self.postMessage({ 
+      type: 'transcribe_complete', 
+      result: {
+        text: fullText,
+        chunks,
+        tps,
+      }
+    });
   } catch (error) {
     self.postMessage({ type: 'error', error: error.message });
   }

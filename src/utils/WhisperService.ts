@@ -1,7 +1,13 @@
 import { WhisperResult } from '@/types/whisper';
 import { WHISPER_CONFIG } from '@/config/whisper';
 
-type ProgressCallback = (progress: { status: string; progress?: number }) => void;
+import { WhisperStreamUpdate } from '@/types/whisper';
+
+type ProgressCallback = (progress: { 
+  status: string; 
+  progress?: number;
+  data?: WhisperStreamUpdate;
+}) => void;
 
 class WhisperService {
   private static instance: WhisperService;

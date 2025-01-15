@@ -6,9 +6,23 @@ export interface WhisperModelRef {
   current: WhisperModel | null;
 }
 
+export interface WhisperChunk {
+  text: string;
+  timestamp: [number, number | null];
+  finalised: boolean;
+  offset: number;
+}
+
+export interface WhisperStreamUpdate {
+  text: string;
+  chunks: WhisperChunk[];
+  tps?: number;  // tokens per second
+}
+
 export interface WhisperResult {
   text: string;
-  timestamp: number;
+  chunks: WhisperChunk[];
+  tps?: number;
 }
 
 export interface AudioRefs {
