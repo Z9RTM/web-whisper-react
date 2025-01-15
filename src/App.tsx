@@ -6,17 +6,43 @@ import { Alert, AlertTitle } from '@/components/ui/alert';
 import { useWhisperModel } from '@/hooks/useWhisperModel';
 import { useAudioProcessing } from '@/hooks/useAudioProcessing';
 import { STATUS_MESSAGES } from '@/config/whisper';
+import { TranscriptionDisplay } from '@/components/TranscriptionDisplay';
+import { ProcessingStatus } from '@/components/ProcessingStatus';
+import { WhisperChunk } from '@/types/whisper';
 
 const WhisperBrowserStreaming = () => {
   const [isRecording, setIsRecording] = useState(false);
-  const [transcript, setTranscript] = useState('');
+  const [chunks, setChunks] = useState<WhisperChunk[]>([]);
+  const [processingStatus, setProcessingStatus] = useState({
+    status: STATUS_MESSAGES.INITIAL,
+    progress: 0,
+    tps: undefined as number | undefined
+  });
   
   const { isModelLoaded, status: modelStatus, processAudio } = useWhisperModel();
   
   const handleAudioProcess = useCallback(async (audio: Float32Array) => {
     try {
-      const result = await processAudio(audio);
-      setTranscript(prev => prev + ' ' + result.text);
+      const result = await processAudio(audio, (progress) => {
+        if (progress.status === 'update' && progress.data) {
+          const { chunks: newChunks, tps } = progress.data;
+          setChunks(newChunks);
+          setProcessingStatus(prev => ({
+            ...prev,
+            tps
+          }));
+        } else {
+          setProcessingStatus(prev => ({
+            ...prev,
+            status: progress.status,
+            progress: progress.progress ?? prev.progress
+          }));
+        }
+      });
+      
+      if (result) {
+        setChunks(result.chunks);
+      }
     } catch (err) {
       // エラーはuseWhisperModel内で処理されるため、ここでは何もしない
     }
@@ -26,6 +52,12 @@ const WhisperBrowserStreaming = () => {
 
   const startRecording = async () => {
     try {
+      setChunks([]); // 新しい録音を開始する前にチャンクをクリア
+      setProcessingStatus(prev => ({
+        ...prev,
+        status: STATUS_MESSAGES.RECORDING,
+        progress: 0
+      }));
       await setupAudioProcessing();
       setIsRecording(true);
     } catch {
@@ -36,6 +68,11 @@ const WhisperBrowserStreaming = () => {
   const stopRecording = () => {
     stopAudioProcessing();
     setIsRecording(false);
+    setProcessingStatus(prev => ({
+      ...prev,
+      status: STATUS_MESSAGES.WAITING,
+      tps: undefined
+    }));
   };
 
   // エラー状態の統合
@@ -59,9 +96,11 @@ const WhisperBrowserStreaming = () => {
             </Alert>
           )}
           
-          <div className="text-sm text-gray-500 text-center">
-            状態: {currentStatus}
-          </div>
+          <ProcessingStatus
+            status={processingStatus.status}
+            progress={processingStatus.progress}
+            tps={processingStatus.tps}
+          />
           
           <div className="flex justify-center gap-4">
             <Button
@@ -83,9 +122,10 @@ const WhisperBrowserStreaming = () => {
             </Button>
           </div>
 
-          <div className="p-4 bg-gray-50 rounded-lg min-h-[200px] whitespace-pre-wrap">
-            {transcript || STATUS_MESSAGES.DEFAULT_TRANSCRIPT}
-          </div>
+          <TranscriptionDisplay
+            chunks={chunks}
+            isProcessing={isRecording || processingStatus.status === STATUS_MESSAGES.LOADING}
+          />
         </div>
       </CardContent>
     </Card>
