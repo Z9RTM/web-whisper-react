@@ -2,9 +2,22 @@
 
 declare const self: ServiceWorkerGlobalScope;
 
-import { pipeline } from '@xenova/transformers';
+import { env, AutomaticSpeechRecognitionPipeline, pipeline } from '@xenova/transformers';
 
-let whisperPipeline: any = null;
+// Configure transformers.js to use the Xenova models
+env.useBrowserCache = false;
+env.allowLocalModels = false;
+
+interface WhisperPipeline {
+  transcribe: (audio: Float32Array, config: {
+    chunk_length_s: number;
+    stride_length_s: number;
+    language: string;
+    return_timestamps: boolean;
+  }) => Promise<any>;
+}
+
+let whisperPipeline: WhisperPipeline | null = null;
 
 // Service Workerのインストール時の処理
 self.addEventListener('install', (event: ExtendableEvent) => {
@@ -47,7 +60,7 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
         case 'INIT_PIPELINE':
           if (!whisperPipeline) {
             console.log('[Whisper Service Worker] Initializing pipeline...');
-            whisperPipeline = await pipeline('automatic-speech-recognition', 'Xenova/whisper-small', {
+            const pipe = await pipeline('automatic-speech-recognition', 'Xenova/whisper-small', {
               progress_callback: (progress: { status: string; progress?: number }) => {
                 if (progress.status === 'progress' && progress.progress !== undefined) {
                   port.postMessage({
@@ -56,7 +69,13 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
                   });
                 }
               }
-            });
+            }) as AutomaticSpeechRecognitionPipeline;
+
+            whisperPipeline = {
+              transcribe: async (audio, config) => {
+                return await pipe(audio, config);
+              }
+            };
             console.log('[Whisper Service Worker] Pipeline initialized');
           }
           port.postMessage({ type: 'PIPELINE_READY' });
@@ -67,7 +86,7 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
             throw new Error('Pipeline not initialized');
           }
           console.log('[Whisper Service Worker] Processing audio...');
-          const result = await whisperPipeline(event.data.audio, {
+          const result = await whisperPipeline.transcribe(event.data.audio, {
             chunk_length_s: event.data.config.chunkLengthSeconds,
             stride_length_s: event.data.config.strideLengthSeconds,
             language: event.data.config.language,
