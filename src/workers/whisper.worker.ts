@@ -2,6 +2,14 @@ import { pipeline, WhisperTextStreamer } from '@huggingface/transformers';
 import { WHISPER_CONFIG } from '@/config/whisper';
 import { WhisperResult, WhisperChunk } from '@/types/whisper';
 
+interface WhisperPipelineResult {
+  text: string;
+  chunks?: {
+    text: string;
+    timestamp: [number, number | null];
+  }[];
+}
+
 let whisperPipeline: any = null;
 let chunkCount = 0;
 
@@ -113,7 +121,7 @@ async function processAudio(audioData: Float32Array) {
     });
 
     // Run transcription
-    const result = await whisperPipeline(audioData, {
+    const result: WhisperPipelineResult = await whisperPipeline(audioData, {
       top_k: 0,
       do_sample: false,
       chunk_length_s: WHISPER_CONFIG.chunkLengthSeconds,
@@ -125,8 +133,22 @@ async function processAudio(audioData: Float32Array) {
       streamer,
     });
 
-    // Combine all chunk texts for the final result
-    const fullText = chunks.map(chunk => chunk.text).join(' ').trim();
+    // Combine result with chunks
+    const fullText = result.text || chunks.map(chunk => chunk.text).join(' ').trim();
+    
+    // If result contains timestamps, merge them with our chunks
+    if (result.chunks) {
+      result.chunks.forEach((resultChunk, index) => {
+        if (index < chunks.length) {
+          chunks[index] = {
+            ...chunks[index],
+            text: resultChunk.text || chunks[index].text,
+            timestamp: resultChunk.timestamp || chunks[index].timestamp,
+            finalised: true
+          };
+        }
+      });
+    }
 
     self.postMessage({ 
       type: 'transcribe_complete', 
