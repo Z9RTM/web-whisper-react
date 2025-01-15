@@ -7,6 +7,7 @@ let whisperPipeline: any = null;
 // Worker message types
 type InitMessage = {
   type: 'init';
+  useWebGPU?: boolean;
 };
 
 type TranscribeMessage = {
@@ -17,13 +18,28 @@ type TranscribeMessage = {
 type WorkerMessage = InitMessage | TranscribeMessage;
 
 // Initialize the pipeline
-async function initializePipeline(callback: (progress: { status: string; progress?: number }) => void) {
+async function initializePipeline(
+  callback: (progress: { status: string; progress?: number }) => void,
+  useWebGPU: boolean = false
+) {
   try {
+    // Check WebGPU availability
+    if (useWebGPU) {
+      if (!navigator.gpu) {
+        self.postMessage({ 
+          type: 'warning', 
+          message: 'WebGPU is not available, falling back to default backend' 
+        });
+        useWebGPU = false;
+      }
+    }
+
     whisperPipeline = await pipeline(
       'automatic-speech-recognition',
       'onnx-community/whisper-small',
       {
-        progress_callback: callback
+        progress_callback: callback,
+        ...(useWebGPU ? { backend: 'webgpu' } : {})
       }
     );
     self.postMessage({ type: 'init_complete' });
@@ -59,9 +75,12 @@ self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
 
   switch (type) {
     case 'init':
-      await initializePipeline((progress) => {
-        self.postMessage({ type: 'progress', progress });
-      });
+      await initializePipeline(
+        (progress) => {
+          self.postMessage({ type: 'progress', progress });
+        },
+        event.data.useWebGPU
+      );
       break;
 
     case 'transcribe':

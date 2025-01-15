@@ -6,7 +6,8 @@ export const WHISPER_CONFIG = {
   chunkLengthSeconds: 30,
   strideLengthSeconds: 5,
   language: 'japanese',
-  modelId: 'Xenova/whisper-base',
+  modelId: 'onnx-community/whisper-small',
+  useWebGPU: false, // デフォルトはfalse
 } as const;
 
 export const STATUS_MESSAGES = {

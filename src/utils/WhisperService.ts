@@ -1,4 +1,5 @@
 import { WhisperResult } from '@/types/whisper';
+import { WHISPER_CONFIG } from '@/config/whisper';
 
 type ProgressCallback = (progress: { status: string; progress?: number }) => void;
 
@@ -100,7 +101,10 @@ class WhisperService {
           throw new Error('Failed to create worker');
         }
 
-        this.worker.postMessage({ type: 'init' });
+        this.worker.postMessage({ 
+          type: 'init',
+          useWebGPU: WHISPER_CONFIG.useWebGPU
+        });
         resolve();
       } catch (error) {
         this.isInitializing = false;
