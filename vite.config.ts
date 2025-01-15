@@ -25,9 +25,12 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
-          transformers: ['@xenova/transformers'],
+          transformers: ['@huggingface/transformers'],
         },
       },
     },
+  },
+  optimizeDeps: {
+    include: ['@huggingface/transformers'],
   },
 })

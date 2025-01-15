@@ -2,11 +2,7 @@
 
 declare const self: ServiceWorkerGlobalScope;
 
-import { env, AutomaticSpeechRecognitionPipeline, pipeline } from '@xenova/transformers';
-
-// Configure transformers.js to use the Xenova models
-env.useBrowserCache = false;
-env.allowLocalModels = false;
+import { pipeline } from '@huggingface/transformers';
 
 interface WhisperPipeline {
   transcribe: (audio: Float32Array, config: {
@@ -60,20 +56,14 @@ self.addEventListener('message', (event: ExtendableMessageEvent) => {
         case 'INIT_PIPELINE':
           if (!whisperPipeline) {
             console.log('[Whisper Service Worker] Initializing pipeline...');
-            const pipe = await pipeline('automatic-speech-recognition', 'Xenova/whisper-small', {
-              progress_callback: (progress: { status: string; progress?: number }) => {
-                if (progress.status === 'progress' && progress.progress !== undefined) {
-                  port.postMessage({
-                    type: 'LOADING_PROGRESS',
-                    progress: Math.round(progress.progress)
-                  });
-                }
-              }
-            }) as AutomaticSpeechRecognitionPipeline;
+            const pipe = await pipeline('automatic-speech-recognition', 'openai/whisper-small');
 
             whisperPipeline = {
               transcribe: async (audio, config) => {
-                return await pipe(audio, config);
+                return await pipe(audio, {
+                  ...config,
+                  model: 'openai/whisper-small',
+                });
               }
             };
             console.log('[Whisper Service Worker] Pipeline initialized');
