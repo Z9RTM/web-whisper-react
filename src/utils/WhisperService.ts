@@ -55,7 +55,12 @@ class WhisperService {
 
       const model = await AutoModelForSpeechSeq2Seq.from_pretrained('openai/whisper-small', {
         config: {
-          use_safetensors: true
+          model_type: "whisper",
+          is_encoder_decoder: true,
+          max_position_embeddings: 1500,
+          use_safetensors: true,
+          "transformers.js_config": true,
+          normalized_config: true
         }
       });
       if (this.progressCallback) {
