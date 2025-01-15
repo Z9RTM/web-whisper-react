@@ -1,15 +1,15 @@
-import { WHISPER_CONFIG } from '@/config/whisper';
 import { WhisperResult } from '@/types/whisper';
-import { pipeline } from '@huggingface/transformers';
 
 type ProgressCallback = (progress: { status: string; progress?: number }) => void;
 
 class WhisperService {
   private static instance: WhisperService;
-  private whisperPipeline: any = null;
+  private worker: Worker | null = null;
   private progressCallback: ProgressCallback | null = null;
   private isInitializing: boolean = false;
   private initializationPromise: Promise<void> | null = null;
+  private currentResolve: ((value: WhisperResult) => void) | null = null;
+  private currentReject: ((reason: any) => void) | null = null;
 
   private constructor() {}
 
@@ -20,6 +20,63 @@ class WhisperService {
     return WhisperService.instance;
   }
 
+  private setupWorker() {
+    if (this.worker) {
+      this.worker.terminate();
+    }
+
+    this.worker = new Worker(new URL('../workers/whisper.worker.ts', import.meta.url), {
+      type: 'module'
+    });
+
+    this.worker.onmessage = (event) => {
+      const { type, progress, result, error } = event.data;
+
+      switch (type) {
+        case 'init_complete':
+          if (this.progressCallback) {
+            this.progressCallback({ status: 'progress', progress: 100 });
+          }
+          this.isInitializing = false;
+          break;
+
+        case 'progress':
+          if (this.progressCallback) {
+            this.progressCallback(progress);
+          }
+          break;
+
+        case 'transcribe_complete':
+          if (this.currentResolve) {
+            this.currentResolve(result);
+            this.currentResolve = null;
+            this.currentReject = null;
+          }
+          break;
+
+        case 'error':
+          const errorObj = new Error(error);
+          if (this.currentReject) {
+            this.currentReject(errorObj);
+            this.currentResolve = null;
+            this.currentReject = null;
+          } else {
+            console.error('Worker error:', error);
+          }
+          break;
+      }
+    };
+
+    this.worker.onerror = (error) => {
+      console.error('Worker error:', error);
+      if (this.currentReject) {
+        this.currentReject(error);
+        this.currentResolve = null;
+        this.currentReject = null;
+      }
+    };
+  }
+
   async initialize(progressCallback?: ProgressCallback): Promise<void> {
     if (this.isInitializing) {
       await this.initializationPromise;
@@ -28,72 +85,61 @@ class WhisperService {
 
     this.isInitializing = true;
     this.progressCallback = progressCallback || null;
-    this.initializationPromise = this.doInitialize();
+
+    this.initializationPromise = new Promise<void>((resolve, reject) => {
+      try {
+        console.log('Initializing Whisper pipeline...');
+        
+        if (this.progressCallback) {
+          this.progressCallback({ status: 'progress', progress: 0 });
+        }
+
+        this.setupWorker();
+        
+        if (!this.worker) {
+          throw new Error('Failed to create worker');
+        }
+
+        this.worker.postMessage({ type: 'init' });
+        resolve();
+      } catch (error) {
+        this.isInitializing = false;
+        reject(error);
+      }
+    });
 
     try {
       await this.initializationPromise;
-    } finally {
-      this.isInitializing = false;
-      this.initializationPromise = null;
-    }
-  }
-
-  private async doInitialize(): Promise<void> {
-    try {
-      console.log('Initializing Whisper pipeline...');
-      
-      if (this.progressCallback) {
-        this.progressCallback({ status: 'progress', progress: 0 });
-      }
-
-      if (this.progressCallback) {
-        this.progressCallback({ status: 'progress', progress: 50 });
-      }
-
-      // Create pipeline
-      this.whisperPipeline = await pipeline(
-        'automatic-speech-recognition',
-        'onnx-community/whisper-small',
-        {
-          progress_callback: (progress: { status: string; progress?: number }) => {
-            if (this.progressCallback) {
-              this.progressCallback(progress);
-            }
-          }
-        }
-      );
-
-      if (this.progressCallback) {
-        this.progressCallback({ status: 'progress', progress: 100 });
-      }
-
       console.log('Pipeline initialized successfully');
     } catch (error) {
       console.error('Failed to initialize Whisper pipeline:', error);
       throw error;
+    } finally {
+      this.initializationPromise = null;
     }
   }
 
   async processAudio(audioData: Float32Array): Promise<WhisperResult> {
-    if (!this.whisperPipeline) {
+    if (!this.worker) {
       throw new Error('Pipeline not initialized');
     }
 
-    try {
-      console.log('Processing audio...');
-      const result = await this.whisperPipeline(audioData, {
-        chunk_length_s: WHISPER_CONFIG.chunkLengthSeconds,
-        stride_length_s: WHISPER_CONFIG.strideLengthSeconds,
-        language: WHISPER_CONFIG.language,
-        return_timestamps: true,
-        task: 'transcribe',
-      });
+    return new Promise<WhisperResult>((resolve, reject) => {
+      try {
+        console.log('Processing audio...');
+        this.currentResolve = resolve;
+        this.currentReject = reject;
+        this.worker!.postMessage({ type: 'transcribe', audioData }, [audioData.buffer]);
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
 
-      console.log('Audio processing complete');
-      return result as WhisperResult;
-    } catch (error) {
-      console.error('Error processing audio:', error);
-      throw error;
+  dispose() {
+    if (this.worker) {
+      this.worker.terminate();
+      this.worker = null;
     }
   }
 }
