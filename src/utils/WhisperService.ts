@@ -22,7 +22,8 @@ class WhisperService {
 
   async initialize(progressCallback?: ProgressCallback): Promise<void> {
     if (this.isInitializing) {
-      return this.initializationPromise;
+      await this.initializationPromise;
+      return;
     }
 
     this.isInitializing = true;
