@@ -19,6 +19,7 @@ export default defineConfig({
     headers: {
       'Cross-Origin-Opener-Policy': 'same-origin',
       'Cross-Origin-Embedder-Policy': 'require-corp',
+      'Service-Worker-Allowed': '/',
     },
   },
   build: {
@@ -29,8 +30,13 @@ export default defineConfig({
         },
       },
     },
+    target: 'es2020',
   },
   optimizeDeps: {
     include: ['@huggingface/transformers'],
+  },
+  worker: {
+    format: 'es',
+    plugins: [],
   },
 })

@@ -53,7 +53,6 @@ class WhisperService {
       console.log('Registering Service Worker...');
       this.registration = await navigator.serviceWorker.register('/whisper-worker.js', {
         scope: '/',
-        type: 'module'
       });
 
       // Service Workerがアクティブになるまで待機
