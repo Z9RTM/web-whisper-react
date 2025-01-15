@@ -70,14 +70,12 @@ class WhisperService {
       }
 
       // Create pipeline
-      this.whisperPipeline = await pipeline(
-        'automatic-speech-recognition',
-        {
-          model,
-          tokenizer: processor.tokenizer,
-          feature_extractor: processor.feature_extractor,
-        }
-      );
+      this.whisperPipeline = await pipeline({
+        task: 'automatic-speech-recognition',
+        model,
+        tokenizer: processor.tokenizer,
+        feature_extractor: processor.feature_extractor
+      });
 
       if (this.progressCallback) {
         this.progressCallback({ status: 'progress', progress: 100 });
