@@ -1,6 +1,6 @@
 import { WHISPER_CONFIG } from '@/config/whisper';
 import { WhisperResult } from '@/types/whisper';
-import { AutoProcessor, AutoModelForSpeechSeq2Seq, pipeline } from '@huggingface/transformers';
+import { pipeline } from '@huggingface/transformers';
 
 type ProgressCallback = (progress: { status: string; progress?: number }) => void;
 
@@ -46,28 +46,8 @@ class WhisperService {
         this.progressCallback({ status: 'progress', progress: 0 });
       }
 
-      // Load processor and model
-      const processor = await AutoProcessor.from_pretrained('openai/whisper-small', {
-        quantized: true
-      });
       if (this.progressCallback) {
         this.progressCallback({ status: 'progress', progress: 50 });
-      }
-
-      const model = await AutoModelForSpeechSeq2Seq.from_pretrained('openai/whisper-small', {
-        config: {
-          model_type: "whisper",
-          is_encoder_decoder: true,
-          max_position_embeddings: 1500,
-          "transformers.js_config": {
-            format: "safetensors",
-            quantized: true
-          },
-          normalized_config: true
-        }
-      });
-      if (this.progressCallback) {
-        this.progressCallback({ status: 'progress', progress: 90 });
       }
 
       // Create pipeline
