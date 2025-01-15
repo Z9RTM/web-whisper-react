@@ -1,13 +1,9 @@
 import path from "path"
 import react from "@vitejs/plugin-react"
 import { defineConfig } from "vite"
-import { serviceWorkerPlugin } from './vite-sw-plugin'
 
 export default defineConfig({
-  plugins: [
-    react(),
-    serviceWorkerPlugin(),
-  ],
+  plugins: [react()],
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
@@ -19,24 +15,12 @@ export default defineConfig({
     headers: {
       'Cross-Origin-Opener-Policy': 'same-origin',
       'Cross-Origin-Embedder-Policy': 'require-corp',
-      'Service-Worker-Allowed': '/',
     },
   },
   build: {
-    rollupOptions: {
-      output: {
-        manualChunks: {
-          transformers: ['@huggingface/transformers'],
-        },
-      },
-    },
     target: 'es2020',
   },
   optimizeDeps: {
     include: ['@huggingface/transformers'],
-  },
-  worker: {
-    format: 'es',
-    plugins: [],
   },
 })

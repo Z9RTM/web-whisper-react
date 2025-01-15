@@ -1,11 +1,12 @@
 import { WHISPER_CONFIG } from '@/config/whisper';
 import { WhisperResult } from '@/types/whisper';
+import { pipeline } from '@huggingface/transformers';
 
 type ProgressCallback = (progress: { status: string; progress?: number }) => void;
 
 class WhisperService {
   private static instance: WhisperService;
-  private registration: ServiceWorkerRegistration | null = null;
+  private whisperPipeline: any = null;
   private progressCallback: ProgressCallback | null = null;
   private isInitializing: boolean = false;
   private initializationPromise: Promise<void> | null = null;
@@ -25,7 +26,8 @@ class WhisperService {
     }
 
     this.isInitializing = true;
-    this.initializationPromise = this.doInitialize(progressCallback);
+    this.progressCallback = progressCallback || null;
+    this.initializationPromise = this.doInitialize();
 
     try {
       await this.initializationPromise;
@@ -35,117 +37,37 @@ class WhisperService {
     }
   }
 
-  private async doInitialize(progressCallback?: ProgressCallback): Promise<void> {
-    if (!('serviceWorker' in navigator)) {
-      throw new Error('Service Worker is not supported in this browser');
-    }
-
-    this.progressCallback = progressCallback || null;
-
+  private async doInitialize(): Promise<void> {
     try {
-      // 既存のService Workerを登録解除
-      const existingRegistration = await navigator.serviceWorker.getRegistration();
-      if (existingRegistration) {
-        await existingRegistration.unregister();
-      }
-
-      // 新しいService Workerを登録
-      console.log('Registering Service Worker...');
-      this.registration = await navigator.serviceWorker.register('/whisper-worker.js', {
-        scope: '/',
-      });
-
-      // Service Workerがアクティブになるまで待機
-      if (this.registration.installing) {
-        await new Promise<void>((resolve) => {
-          if (!this.registration) return resolve();
-          
-          this.registration.installing?.addEventListener('statechange', (e) => {
-            if ((e.target as ServiceWorker).state === 'activated') {
-              resolve();
-            }
-          });
-        });
-      }
-
-      console.log('Service Worker registered. Initializing pipeline...');
-      const result = await this.sendMessage({ type: 'INIT_PIPELINE' });
-      
-      if (result.type !== 'PIPELINE_READY') {
-        throw new Error('Failed to initialize pipeline');
-      }
-      
+      console.log('Initializing Whisper pipeline...');
+      this.whisperPipeline = await pipeline('automatic-speech-recognition', 'openai/whisper-small');
       console.log('Pipeline initialized successfully');
     } catch (error) {
-      console.error('Failed to initialize Service Worker:', error);
+      console.error('Failed to initialize Whisper pipeline:', error);
       throw error;
     }
   }
 
   async processAudio(audioData: Float32Array): Promise<WhisperResult> {
-    if (!this.registration?.active) {
-      throw new Error('Service Worker is not active');
+    if (!this.whisperPipeline) {
+      throw new Error('Pipeline not initialized');
     }
 
-    console.log('Processing audio...');
-    const result = await this.sendMessage({
-      type: 'PROCESS_AUDIO',
-      audio: audioData,
-      config: {
-        chunkLengthSeconds: WHISPER_CONFIG.chunkLengthSeconds,
-        strideLengthSeconds: WHISPER_CONFIG.strideLengthSeconds,
+    try {
+      console.log('Processing audio...');
+      const result = await this.whisperPipeline(audioData, {
+        chunk_length_s: WHISPER_CONFIG.chunkLengthSeconds,
+        stride_length_s: WHISPER_CONFIG.strideLengthSeconds,
         language: WHISPER_CONFIG.language,
-      }
-    });
+        return_timestamps: true,
+      });
 
-    if (result.type === 'ERROR') {
-      console.error('Error processing audio:', result.error);
-      throw new Error(result.error);
-    }
-
-    if (result.type === 'PROCESS_COMPLETE') {
       console.log('Audio processing complete');
-      return result.result as WhisperResult;
+      return result as WhisperResult;
+    } catch (error) {
+      console.error('Error processing audio:', error);
+      throw error;
     }
-
-    throw new Error('Invalid response from worker');
-  }
-
-  private sendMessage(message: any): Promise<any> {
-    return new Promise((resolve, reject) => {
-      if (!this.registration?.active) {
-        reject(new Error('Service Worker is not active'));
-        return;
-      }
-
-      const messageChannel = new MessageChannel();
-      const timeoutId = setTimeout(() => {
-        messageChannel.port1.close();
-        reject(new Error('Message timeout'));
-      }, 30000); // 30秒タイムアウト
-
-      messageChannel.port1.onmessage = (event) => {
-        clearTimeout(timeoutId);
-        
-        if (event.data.type === 'ERROR') {
-          reject(new Error(event.data.error));
-        } else if (event.data.type === 'LOADING_PROGRESS' && this.progressCallback) {
-          this.progressCallback({
-            status: 'progress',
-            progress: event.data.progress
-          });
-        } else {
-          resolve(event.data);
-        }
-      };
-
-      try {
-        this.registration.active.postMessage(message, [messageChannel.port2]);
-      } catch (error) {
-        clearTimeout(timeoutId);
-        reject(error);
-      }
-    });
   }
 }
 
