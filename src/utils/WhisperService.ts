@@ -129,7 +129,10 @@ class WhisperService {
     }
   }
 
-  async processAudio(audioData: Float32Array): Promise<WhisperResult> {
+  async processAudio(
+    audioData: Float32Array,
+    progressCallback?: (progress: { status: string; progress?: number; data?: any }) => void
+  ): Promise<WhisperResult> {
     if (!this.worker) {
       throw new Error('Pipeline not initialized');
     }
@@ -139,6 +142,7 @@ class WhisperService {
         console.log('Processing audio...');
         this.currentResolve = resolve;
         this.currentReject = reject;
+        this.progressCallback = progressCallback || null;
         this.worker!.postMessage({ type: 'transcribe', audioData }, [audioData.buffer]);
       } catch (error) {
         reject(error);

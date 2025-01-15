@@ -37,14 +37,17 @@ export const useWhisperModel = () => {
     initWhisper();
   }, []);
 
-  const processAudio = useCallback(async (audioData: Float32Array): Promise<WhisperResult> => {
+  const processAudio = useCallback(async (
+    audioData: Float32Array,
+    progressCallback?: (progress: { status: string; progress?: number; data?: any }) => void
+  ): Promise<WhisperResult> => {
     if (!isModelLoaded) {
       throw new Error(ERROR_MESSAGES.MODEL_NOT_INITIALIZED);
     }
 
     try {
       const whisperService = WhisperService.getInstance();
-      return await whisperService.processAudio(audioData);
+      return await whisperService.processAudio(audioData, progressCallback);
     } catch (error) {
       if (error instanceof Error) {
         throw error;
