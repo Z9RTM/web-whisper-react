@@ -1,33 +1,28 @@
-import { useState, useRef, useCallback, useEffect } from 'react';
-import { pipeline } from '@huggingface/transformers';
-import { WhisperModelRef, ProcessingStatus, WhisperResult } from '@/types/whisper';
-import { WHISPER_CONFIG, ERROR_MESSAGES, STATUS_MESSAGES } from '@/config/whisper';
+import { useState, useCallback, useEffect } from 'react';
+import { ProcessingStatus, WhisperResult } from '@/types/whisper';
+import { ERROR_MESSAGES, STATUS_MESSAGES } from '@/config/whisper';
+import WhisperService from '@/utils/WhisperService';
 
 export const useWhisperModel = () => {
   const [isModelLoaded, setIsModelLoaded] = useState(false);
   const [status, setStatus] = useState<ProcessingStatus>({ 
     status: STATUS_MESSAGES.INITIAL 
   });
-  const whisperRef = useRef<WhisperModelRef>({ current: null });
 
   useEffect(() => {
     const initWhisper = async () => {
       try {
         setStatus({ status: STATUS_MESSAGES.LOADING });
-        const pipe = await pipeline(
-          'automatic-speech-recognition',
-          WHISPER_CONFIG.modelId,
-          {
-            progress_callback: (progress: { status: string; progress?: number }) => {
-              if (progress.status === 'progress' && progress.progress !== undefined) {
-                setStatus({ 
-                  status: `${STATUS_MESSAGES.LOADING} ${Math.round(progress.progress)}%` 
-                });
-              }
-            }
+        const whisperService = WhisperService.getInstance();
+        
+        await whisperService.initialize((progress) => {
+          if (progress.status === 'progress' && progress.progress !== undefined) {
+            setStatus({ 
+              status: `${STATUS_MESSAGES.LOADING} ${Math.round(progress.progress)}%` 
+            });
           }
-        );
-        whisperRef.current.current = pipe;
+        });
+
         setIsModelLoaded(true);
         setStatus({ status: STATUS_MESSAGES.READY });
       } catch (err: unknown) {
@@ -43,23 +38,20 @@ export const useWhisperModel = () => {
   }, []);
 
   const processAudio = useCallback(async (audioData: Float32Array): Promise<WhisperResult> => {
-    if (!whisperRef.current.current) {
+    if (!isModelLoaded) {
       throw new Error(ERROR_MESSAGES.MODEL_NOT_INITIALIZED);
     }
 
-    const result = await whisperRef.current.current(audioData, {
-      chunk_length_s: WHISPER_CONFIG.chunkLengthSeconds,
-      stride_length_s: WHISPER_CONFIG.strideLengthSeconds,
-      language: WHISPER_CONFIG.language,
-      return_timestamps: true,
-    });
-
-    if (typeof result === 'object' && 'text' in result) {
-      return result as WhisperResult;
+    try {
+      const whisperService = WhisperService.getInstance();
+      return await whisperService.processAudio(audioData);
+    } catch (error) {
+      if (error instanceof Error) {
+        throw error;
+      }
+      throw new Error('Invalid response format from Whisper model');
     }
-
-    throw new Error('Invalid response format from Whisper model');
-  }, []);
+  }, [isModelLoaded]);
 
   return {
     isModelLoaded,
