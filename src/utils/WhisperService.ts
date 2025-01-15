@@ -74,9 +74,9 @@ class WhisperService {
         'automatic-speech-recognition',
         model,
         {
-          progress_callback: (progress) => {
+          progress_callback: (progress: { status: string; progress?: number }) => {
             if (this.progressCallback) {
-              this.progressCallback({ status: 'progress', progress: progress * 100 });
+              this.progressCallback(progress);
             }
           }
         }
