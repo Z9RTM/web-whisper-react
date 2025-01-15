@@ -54,7 +54,9 @@ class WhisperService {
       }
 
       const model = await AutoModelForSpeechSeq2Seq.from_pretrained('openai/whisper-small', {
-        quantized: true
+        config: {
+          use_safetensors: true
+        }
       });
       if (this.progressCallback) {
         this.progressCallback({ status: 'progress', progress: 90 });
