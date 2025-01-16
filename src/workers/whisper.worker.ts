@@ -1,188 +1,133 @@
-import { pipeline, WhisperTextStreamer } from '@huggingface/transformers';
+import {
+  AutoTokenizer,
+  AutoProcessor,
+  WhisperForConditionalGeneration,
+  WhisperTextStreamer,
+  full
+} from '@huggingface/transformers';
 import { WHISPER_CONFIG } from '@/config/whisper';
 import { WhisperResult, WhisperChunk } from '@/types/whisper';
 
-interface WhisperPipelineResult {
-  text: string;
-  chunks?: {
-    text: string;
-    timestamp: [number, number | null];
-  }[];
+const MODEL_ID = 'onnx-community/whisper-small';
+
+/**
+ * Singleton class for managing the Whisper model and its components
+ */
+class WhisperPipeline {
+  static tokenizer = null;
+  static processor = null;
+  static model = null;
+  static isProcessing = false;
+
+  static async getInstance(progressCallback = null) {
+    try {
+      this.tokenizer ??= await AutoTokenizer.from_pretrained(MODEL_ID, {
+        progress_callback: progressCallback
+      });
+
+      this.processor ??= await AutoProcessor.from_pretrained(MODEL_ID, {
+        progress_callback: progressCallback
+      });
+
+      this.model ??= await WhisperForConditionalGeneration.from_pretrained(MODEL_ID, {
+        dtype: {
+          encoder_model: 'fp32',
+          decoder_model_merged: 'q4'
+        },
+        device: 'webgpu',
+        progress_callback: progressCallback
+      });
+
+      return [this.tokenizer, this.processor, this.model];
+    } catch (error) {
+      console.error('Error initializing pipeline:', error);
+      throw error;
+    }
+  }
+
+  static async cleanup() {
+    try {
+      if (this.model) {
+        await this.model.dispose();
+        this.model = null;
+      }
+      this.tokenizer = null;
+      this.processor = null;
+    } catch (error) {
+      console.warn('Error during cleanup:', error);
+    }
+  }
 }
 
-let whisperPipeline: any = null;
-let chunkCount = 0;
-
-// Worker message types
-type InitMessage = {
-  type: 'init';
-  useWebGPU?: boolean;
+// Message types
+type WorkerMessage = {
+  type: 'load' | 'transcribe';
+  data?: {
+    audio: Float32Array;
+    language?: string;
+  };
 };
 
-type TranscribeMessage = {
-  type: 'transcribe';
-  audioData: Float32Array;
-};
-
-type WorkerMessage = InitMessage | TranscribeMessage;
-
-type WorkerResponse = {
-  type: 'received' | 'init_complete' | 'progress' | 'transcribe_complete' | 'error';
-  messageType?: string;
-  progress?: { status: string; progress?: number; data?: any };
-  result?: WhisperResult;
-  error?: string;
-};
-
-// Initialize the pipeline
-async function initializePipeline(
-  callback: (progress: { status: string; progress?: number }) => void,
-  useWebGPU: boolean = false
-) {
+async function initialize(progressCallback: (data: any) => void) {
   try {
-    // Check WebGPU availability
-    if (useWebGPU) {
-      if (!navigator.gpu) {
-        self.postMessage({ 
-          type: 'warning', 
-          message: 'WebGPU is not available, falling back to default backend' 
-        });
-        useWebGPU = false;
+    self.postMessage({
+      type: 'progress',
+      progress: {
+        status: 'Loading model...',
+        progress: 0
       }
-    }
+    });
 
-    // Configure pipeline options
-    const pipelineOptions = {
-      progress_callback: callback,
-      ...(useWebGPU ? { backend: 'webgpu' } : {}),
-      revision: 'main',
-      quantized: true,
-      cache_dir: '/whisper_cache',
-      local_files_only: false,
-      model_file_name: 'model.onnx',
-      session_options: {
-        executionProviders: ['wasm'],
-        enableMemPattern: false,
-        executionMode: 'sequential'
+    const [tokenizer, processor, model] = await WhisperPipeline.getInstance(progressCallback);
+
+    self.postMessage({
+      type: 'progress',
+      progress: {
+        status: 'Compiling shaders and warming up model...',
+        progress: 90
       }
-    };
+    });
 
-    // Initialize pipeline with retry
-    let initError = null;
-    for (let i = 0; i < 2; i++) {
-      try {
-        whisperPipeline = await pipeline(
-          'automatic-speech-recognition',
-          'onnx-community/whisper-small',
-          pipelineOptions
-        );
-        break;
-      } catch (error) {
-        initError = error;
-        console.warn(`Pipeline initialization attempt ${i + 1} failed:`, error);
-        await delay(1000);
-      }
-    }
+    // Warm up the model with dummy input
+    await model.generate({
+      input_features: full([1, 80, 3000], 0.0),
+      max_new_tokens: 1,
+    });
 
-    if (!whisperPipeline) {
-      throw initError || new Error('Failed to initialize pipeline');
-    }
     self.postMessage({ type: 'init_complete' });
   } catch (error) {
-    self.postMessage({ type: 'error', error: error.message });
+    self.postMessage({
+      type: 'error',
+      error: error instanceof Error ? error.message : 'Unknown initialization error'
+    });
   }
 }
 
-// Utility function to delay execution
-const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+async function transcribe(audioData: Float32Array) {
+  if (WhisperPipeline.isProcessing) {
+    throw new Error('Already processing audio');
+  }
 
-// Cleanup and reinitialize pipeline
-async function cleanupAndReinitialize(callback: (progress: { status: string; progress?: number }) => void) {
   try {
-    // Cleanup existing pipeline
-    if (whisperPipeline) {
-      try {
-        await whisperPipeline.dispose();
-      } catch (error) {
-        console.warn('Error disposing pipeline:', error);
-      }
-      whisperPipeline = null;
-    }
+    WhisperPipeline.isProcessing = true;
+    const [tokenizer, processor, model] = await WhisperPipeline.getInstance();
 
-    // Clear any cached data
-    if ('caches' in self) {
-      try {
-        const cache = await caches.open('whisper-cache');
-        await cache.delete('/whisper_cache');
-      } catch (error) {
-        console.warn('Error clearing cache:', error);
-      }
-    }
-
-    // Reinitialize
-    await initializePipeline(callback, false);
-    
-    // Verify initialization
-    if (!whisperPipeline) {
-      throw new Error('Pipeline reinitialization failed');
-    }
-  } catch (error) {
-    console.error('Error during reinitialization:', error);
-    throw error;
-  }
-}
-
-// Process audio data with retry logic
-async function processAudio(audioData: Float32Array, maxRetries = 3) {
-  if (!whisperPipeline) {
-    throw new Error('Pipeline not initialized');
-  }
-
-  let lastError: Error | null = null;
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      // If this is a retry attempt, cleanup and reinitialize
-      if (attempt > 0) {
-        self.postMessage({ 
-          type: 'progress', 
-          progress: { 
-            status: `Reinitializing for retry (attempt ${attempt + 1}/${maxRetries})...`,
-            progress: 0 
-          } 
-        });
-        
-        await cleanupAndReinitialize((progress) => {
-          self.postMessage({ 
-            type: 'progress', 
-            progress: {
-              status: `Preparing for retry ${attempt + 1}/${maxRetries}`,
-              progress: progress.progress
-            }
-          });
-        });
-
-        await delay(500); // Short delay after reinitialization
-      }
-
-      const time_precision = whisperPipeline.processor.feature_extractor.config.chunk_length / 
-                          whisperPipeline.model.config.max_source_positions;
-
-    // Storage for chunks to be processed
+    // Storage for chunks and timing info
     const chunks: WhisperChunk[] = [];
     let startTime: number | null = null;
     let numTokens = 0;
     let tps: number | undefined;
 
     // Create streamer for real-time transcription
-    const streamer = new WhisperTextStreamer(whisperPipeline.tokenizer, {
-      time_precision,
+    const streamer = new WhisperTextStreamer(tokenizer, {
+      time_precision: processor.feature_extractor.config.chunk_length / model.config.max_source_positions,
       on_chunk_start: (timestamp: number) => {
-        const offset = (WHISPER_CONFIG.chunkLengthSeconds - WHISPER_CONFIG.strideLengthSeconds) * chunkCount;
+        const offset = (WHISPER_CONFIG.chunkLengthSeconds - WHISPER_CONFIG.strideLengthSeconds) * chunks.length;
         chunks.push({
           text: '',
           timestamp: [offset + timestamp, null],
           finalised: false,
-          offset,
+          offset
         });
       },
       token_callback_function: () => {
@@ -193,7 +138,6 @@ async function processAudio(audioData: Float32Array, maxRetries = 3) {
       },
       callback_function: (text: string) => {
         if (chunks.length === 0) return;
-        // Append text to the last chunk
         chunks[chunks.length - 1].text += text;
 
         self.postMessage({
@@ -201,9 +145,9 @@ async function processAudio(audioData: Float32Array, maxRetries = 3) {
           progress: {
             status: 'update',
             data: {
-              text: '', // Full text will be sent on completion
+              text: '',
               chunks,
-              tps,
+              tps
             }
           }
         });
@@ -212,112 +156,68 @@ async function processAudio(audioData: Float32Array, maxRetries = 3) {
         const current = chunks[chunks.length - 1];
         current.timestamp[1] = timestamp + current.offset;
         current.finalised = true;
-      },
-      on_finalize: () => {
-        startTime = null;
-        numTokens = 0;
-        ++chunkCount;
-      },
+      }
     });
 
-    // Run transcription
-    const result: WhisperPipelineResult = await whisperPipeline(audioData, {
-      top_k: 0,
-      do_sample: false,
-      chunk_length_s: WHISPER_CONFIG.chunkLengthSeconds,
-      stride_length_s: WHISPER_CONFIG.strideLengthSeconds,
+    // Process audio
+    const inputs = await processor(audioData);
+    const result = await model.generate({
+      ...inputs,
       language: WHISPER_CONFIG.language,
       task: 'transcribe',
-      return_timestamps: true,
-      force_full_sequences: false,
-      streamer,
+      streamer
     });
 
-    // Combine result with chunks
-    const fullText = result.text || chunks.map(chunk => chunk.text).join(' ').trim();
-    
-    // If result contains timestamps, merge them with our chunks
-    if (result.chunks) {
-      result.chunks.forEach((resultChunk, index) => {
-        if (index < chunks.length) {
-          chunks[index] = {
-            ...chunks[index],
-            text: resultChunk.text || chunks[index].text,
-            timestamp: resultChunk.timestamp || chunks[index].timestamp,
-            finalised: true
-          };
-        }
-      });
-    }
+    // Get final text
+    const outputText = await tokenizer.batch_decode(result, { skip_special_tokens: true });
+    const fullText = outputText[0] || chunks.map(chunk => chunk.text).join(' ').trim();
 
-    self.postMessage({ 
-      type: 'transcribe_complete', 
+    self.postMessage({
+      type: 'transcribe_complete',
       result: {
         text: fullText,
         chunks,
-        tps,
+        tps
       }
     });
-    return; // Successful completion
   } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      
-      // Log the error for debugging
-      console.error(`Transcription error (attempt ${attempt + 1}/${maxRetries}):`, error);
-      
-      // If this is not the last attempt, continue to the next retry
-      if (attempt < maxRetries - 1) {
-        self.postMessage({ 
-          type: 'progress', 
-          progress: { 
-            status: `Error occurred, preparing for retry...`,
-            progress: 0 
-          } 
-        });
-        continue;
-      }
-    }
-  }
+    self.postMessage({
+      type: 'error',
+      error: error instanceof Error ? error.message : 'Unknown transcription error'
+    });
 
-  // If we exhausted all retries and still have an error, throw it
-  if (lastError) {
-    self.postMessage({ type: 'error', error: lastError.message });
-    return;
+    // Try to cleanup on error
+    await WhisperPipeline.cleanup();
+  } finally {
+    WhisperPipeline.isProcessing = false;
   }
 }
 
 // Handle incoming messages
-self.onmessage = (event: MessageEvent<WorkerMessage>) => {
-  const { type } = event.data;
+self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
+  const { type, data } = event.data;
 
-  // Immediately acknowledge receipt of the message
-  self.postMessage({ type: 'received', messageType: type });
+  try {
+    switch (type) {
+      case 'load':
+        await initialize((progress) => {
+          self.postMessage({ type: 'progress', progress });
+        });
+        break;
 
-  // Process the message asynchronously
-  (async () => {
-    try {
-      switch (type) {
-        case 'init':
-          await initializePipeline(
-            (progress) => {
-              self.postMessage({ type: 'progress', progress });
-            },
-            event.data.useWebGPU
-          );
-          break;
+      case 'transcribe':
+        if (data?.audio) {
+          await transcribe(data.audio);
+        }
+        break;
 
-        case 'transcribe':
-          await processAudio(event.data.audioData);
-          break;
-
-        default:
-          self.postMessage({ type: 'error', error: 'Unknown message type' });
-      }
-    } catch (error) {
-      self.postMessage({ 
-        type: 'error', 
-        error: error instanceof Error ? error.message : 'Unknown error'
-      });
+      default:
+        throw new Error('Unknown message type');
     }
-  })();
+  } catch (error) {
+    self.postMessage({
+      type: 'error',
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+  }
 };

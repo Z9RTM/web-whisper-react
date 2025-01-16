@@ -1,7 +1,4 @@
-import { WhisperResult } from '@/types/whisper';
-import { WHISPER_CONFIG } from '@/config/whisper';
-
-import { WhisperStreamUpdate } from '@/types/whisper';
+import { WhisperResult, WhisperStreamUpdate } from '@/types/whisper';
 
 type ProgressCallback = (progress: { 
   status: string; 
@@ -37,14 +34,9 @@ class WhisperService {
     });
 
     this.worker.onmessage = (event) => {
-      const { type, progress, result, error, messageType } = event.data;
+      const { type, progress, result, error } = event.data;
 
       switch (type) {
-        case 'received':
-          // Message received acknowledgment
-          console.debug(`Worker received message: ${messageType}`);
-          break;
-
         case 'init_complete':
           if (this.progressCallback) {
             this.progressCallback({ status: 'progress', progress: 100 });
@@ -83,26 +75,6 @@ class WhisperService {
       }
     };
 
-    // Add error handler for worker
-    this.worker.onerror = (error) => {
-      console.error('Worker error:', error);
-      if (this.currentReject) {
-        this.currentReject(error);
-        this.currentResolve = null;
-        this.currentReject = null;
-      }
-    };
-
-    // Add message error handler
-    this.worker.onmessageerror = (error) => {
-      console.error('Worker message error:', error);
-      if (this.currentReject) {
-        this.currentReject(new Error('Failed to process worker message'));
-        this.currentResolve = null;
-        this.currentReject = null;
-      }
-    };
-
     this.worker.onerror = (error) => {
       console.error('Worker error:', error);
       if (this.currentReject) {
@@ -136,10 +108,7 @@ class WhisperService {
           throw new Error('Failed to create worker');
         }
 
-        this.worker.postMessage({ 
-          type: 'init',
-          useWebGPU: WHISPER_CONFIG.useWebGPU
-        });
+        this.worker.postMessage({ type: 'load' });
         resolve();
       } catch (error) {
         this.isInitializing = false;
@@ -160,7 +129,7 @@ class WhisperService {
 
   async processAudio(
     audioData: Float32Array,
-    progressCallback?: (progress: { status: string; progress?: number; data?: any }) => void
+    progressCallback?: ProgressCallback
   ): Promise<WhisperResult> {
     if (!this.worker) {
       throw new Error('Pipeline not initialized');
@@ -172,7 +141,12 @@ class WhisperService {
         this.currentResolve = resolve;
         this.currentReject = reject;
         this.progressCallback = progressCallback || null;
-        this.worker!.postMessage({ type: 'transcribe', audioData }, [audioData.buffer]);
+        this.worker!.postMessage({ 
+          type: 'transcribe',
+          data: {
+            audio: audioData
+          }
+        }, [audioData.buffer]);
       } catch (error) {
         reject(error);
       }
