@@ -56,7 +56,11 @@ async function initializePipeline(
       'onnx-community/whisper-small',
       {
         progress_callback: callback,
-        ...(useWebGPU ? { backend: 'webgpu' } : {})
+        ...(useWebGPU ? { backend: 'webgpu' } : {}),
+        revision: 'main',
+        quantized: true,
+        cache_dir: '/whisper_cache',
+        local_files_only: false
       }
     );
     self.postMessage({ type: 'init_complete' });
@@ -65,14 +69,31 @@ async function initializePipeline(
   }
 }
 
-// Process audio data
-async function processAudio(audioData: Float32Array) {
+// Utility function to delay execution
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Process audio data with retry logic
+async function processAudio(audioData: Float32Array, maxRetries = 3) {
   if (!whisperPipeline) {
     throw new Error('Pipeline not initialized');
   }
 
-  try {
-    const time_precision = whisperPipeline.processor.feature_extractor.config.chunk_length / 
+  let lastError: Error | null = null;
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      // If this is a retry attempt, wait before trying again
+      if (attempt > 0) {
+        await delay(1000 * attempt); // Exponential backoff
+        self.postMessage({ 
+          type: 'progress', 
+          progress: { 
+            status: `Retrying transcription (attempt ${attempt + 1}/${maxRetries})...`,
+            progress: 0 
+          } 
+        });
+      }
+
+      const time_precision = whisperPipeline.processor.feature_extractor.config.chunk_length / 
                           whisperPipeline.model.config.max_source_positions;
 
     // Storage for chunks to be processed
@@ -166,8 +187,45 @@ async function processAudio(audioData: Float32Array) {
         tps,
       }
     });
+    return; // Successful completion
   } catch (error) {
-    self.postMessage({ type: 'error', error: error.message });
+      lastError = error instanceof Error ? error : new Error(String(error));
+      
+      // If this is a TypeError related to model execution, try to reinitialize the pipeline
+      if (error instanceof TypeError && error.message.includes('Cannot read properties of null')) {
+        self.postMessage({ 
+          type: 'progress', 
+          progress: { 
+            status: 'Reinitializing pipeline...',
+            progress: 0 
+          } 
+        });
+        
+        try {
+          // Reinitialize the pipeline
+          await initializePipeline(
+            (progress) => {
+              self.postMessage({ type: 'progress', progress });
+            },
+            false // Fallback to default backend
+          );
+          continue; // Retry after reinitialization
+        } catch (reinitError) {
+          console.error('Failed to reinitialize pipeline:', reinitError);
+        }
+      }
+      
+      // If this is not the last attempt, continue to the next retry
+      if (attempt < maxRetries - 1) {
+        continue;
+      }
+    }
+  }
+
+  // If we exhausted all retries and still have an error, throw it
+  if (lastError) {
+    self.postMessage({ type: 'error', error: lastError.message });
+    return;
   }
 }
 
