@@ -26,9 +26,23 @@ const WhisperBrowserStreaming = () => {
       const result = await processAudio(audio, (progress) => {
         if (progress.status === 'update' && progress.data) {
           const { chunks: newChunks, tps } = progress.data;
-          setChunks(newChunks);
+          // リアルタイムでチャンクを更新
+          setChunks(prevChunks => {
+            // 新しいチャンクだけを追加または更新
+            const updatedChunks = [...prevChunks];
+            newChunks.forEach((chunk, index) => {
+              if (index >= updatedChunks.length) {
+                updatedChunks.push(chunk);
+              } else if (chunk.text !== updatedChunks[index].text || !updatedChunks[index].finalised) {
+                updatedChunks[index] = chunk;
+              }
+            });
+            return updatedChunks;
+          });
+
           setProcessingStatus(prev => ({
             ...prev,
+            status: STATUS_MESSAGES.RECORDING,
             tps
           }));
         } else {
@@ -41,10 +55,17 @@ const WhisperBrowserStreaming = () => {
       });
       
       if (result) {
+        // 最終結果で完全に更新
         setChunks(result.chunks);
+        setProcessingStatus(prev => ({
+          ...prev,
+          status: STATUS_MESSAGES.READY,
+          progress: 100
+        }));
       }
     } catch (err) {
       // エラーはuseWhisperModel内で処理されるため、ここでは何もしない
+      console.error('Audio processing error:', err);
     }
   }, [processAudio]);
 
@@ -52,16 +73,22 @@ const WhisperBrowserStreaming = () => {
 
   const startRecording = async () => {
     try {
-      setChunks([]); // 新しい録音を開始する前にチャンクをクリア
-      setProcessingStatus(prev => ({
-        ...prev,
+      // 新しい録音を開始する前に状態をリセット
+      setChunks([]);
+      setProcessingStatus({
         status: STATUS_MESSAGES.RECORDING,
-        progress: 0
-      }));
+        progress: 0,
+        tps: undefined
+      });
       await setupAudioProcessing();
       setIsRecording(true);
-    } catch {
-      // エラーはuseAudioProcessing内で処理されるため、ここでは何もしない
+    } catch (error) {
+      console.error('Failed to start recording:', error);
+      setProcessingStatus(prev => ({
+        ...prev,
+        status: STATUS_MESSAGES.WAITING,
+        error: 'Failed to start recording'
+      }));
     }
   };
 

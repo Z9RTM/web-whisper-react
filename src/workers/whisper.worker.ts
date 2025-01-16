@@ -165,6 +165,11 @@ async function transcribe(audioData: Float32Array) {
       ...inputs,
       language: WHISPER_CONFIG.language,
       task: 'transcribe',
+      return_timestamps: true,
+      chunk_length_s: WHISPER_CONFIG.chunkLengthSeconds,
+      stride_length_s: WHISPER_CONFIG.strideLengthSeconds,
+      num_beams: 1,
+      do_sample: false,
       streamer
     });
 
