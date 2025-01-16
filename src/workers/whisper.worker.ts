@@ -51,18 +51,42 @@ async function initializePipeline(
       }
     }
 
-    whisperPipeline = await pipeline(
-      'automatic-speech-recognition',
-      'onnx-community/whisper-small',
-      {
-        progress_callback: callback,
-        ...(useWebGPU ? { backend: 'webgpu' } : {}),
-        revision: 'main',
-        quantized: true,
-        cache_dir: '/whisper_cache',
-        local_files_only: false
+    // Configure pipeline options
+    const pipelineOptions = {
+      progress_callback: callback,
+      ...(useWebGPU ? { backend: 'webgpu' } : {}),
+      revision: 'main',
+      quantized: true,
+      cache_dir: '/whisper_cache',
+      local_files_only: false,
+      model_file_name: 'model.onnx',
+      session_options: {
+        executionProviders: ['wasm'],
+        enableMemPattern: false,
+        executionMode: 'sequential'
       }
-    );
+    };
+
+    // Initialize pipeline with retry
+    let initError = null;
+    for (let i = 0; i < 2; i++) {
+      try {
+        whisperPipeline = await pipeline(
+          'automatic-speech-recognition',
+          'onnx-community/whisper-small',
+          pipelineOptions
+        );
+        break;
+      } catch (error) {
+        initError = error;
+        console.warn(`Pipeline initialization attempt ${i + 1} failed:`, error);
+        await delay(1000);
+      }
+    }
+
+    if (!whisperPipeline) {
+      throw initError || new Error('Failed to initialize pipeline');
+    }
     self.postMessage({ type: 'init_complete' });
   } catch (error) {
     self.postMessage({ type: 'error', error: error.message });
@@ -71,6 +95,42 @@ async function initializePipeline(
 
 // Utility function to delay execution
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Cleanup and reinitialize pipeline
+async function cleanupAndReinitialize(callback: (progress: { status: string; progress?: number }) => void) {
+  try {
+    // Cleanup existing pipeline
+    if (whisperPipeline) {
+      try {
+        await whisperPipeline.dispose();
+      } catch (error) {
+        console.warn('Error disposing pipeline:', error);
+      }
+      whisperPipeline = null;
+    }
+
+    // Clear any cached data
+    if ('caches' in self) {
+      try {
+        const cache = await caches.open('whisper-cache');
+        await cache.delete('/whisper_cache');
+      } catch (error) {
+        console.warn('Error clearing cache:', error);
+      }
+    }
+
+    // Reinitialize
+    await initializePipeline(callback, false);
+    
+    // Verify initialization
+    if (!whisperPipeline) {
+      throw new Error('Pipeline reinitialization failed');
+    }
+  } catch (error) {
+    console.error('Error during reinitialization:', error);
+    throw error;
+  }
+}
 
 // Process audio data with retry logic
 async function processAudio(audioData: Float32Array, maxRetries = 3) {
@@ -81,16 +141,27 @@ async function processAudio(audioData: Float32Array, maxRetries = 3) {
   let lastError: Error | null = null;
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
-      // If this is a retry attempt, wait before trying again
+      // If this is a retry attempt, cleanup and reinitialize
       if (attempt > 0) {
-        await delay(1000 * attempt); // Exponential backoff
         self.postMessage({ 
           type: 'progress', 
           progress: { 
-            status: `Retrying transcription (attempt ${attempt + 1}/${maxRetries})...`,
+            status: `Reinitializing for retry (attempt ${attempt + 1}/${maxRetries})...`,
             progress: 0 
           } 
         });
+        
+        await cleanupAndReinitialize((progress) => {
+          self.postMessage({ 
+            type: 'progress', 
+            progress: {
+              status: `Preparing for retry ${attempt + 1}/${maxRetries}`,
+              progress: progress.progress
+            }
+          });
+        });
+
+        await delay(500); // Short delay after reinitialization
       }
 
       const time_precision = whisperPipeline.processor.feature_extractor.config.chunk_length / 
@@ -191,32 +262,18 @@ async function processAudio(audioData: Float32Array, maxRetries = 3) {
   } catch (error) {
       lastError = error instanceof Error ? error : new Error(String(error));
       
-      // If this is a TypeError related to model execution, try to reinitialize the pipeline
-      if (error instanceof TypeError && error.message.includes('Cannot read properties of null')) {
-        self.postMessage({ 
-          type: 'progress', 
-          progress: { 
-            status: 'Reinitializing pipeline...',
-            progress: 0 
-          } 
-        });
-        
-        try {
-          // Reinitialize the pipeline
-          await initializePipeline(
-            (progress) => {
-              self.postMessage({ type: 'progress', progress });
-            },
-            false // Fallback to default backend
-          );
-          continue; // Retry after reinitialization
-        } catch (reinitError) {
-          console.error('Failed to reinitialize pipeline:', reinitError);
-        }
-      }
+      // Log the error for debugging
+      console.error(`Transcription error (attempt ${attempt + 1}/${maxRetries}):`, error);
       
       // If this is not the last attempt, continue to the next retry
       if (attempt < maxRetries - 1) {
+        self.postMessage({ 
+          type: 'progress', 
+          progress: { 
+            status: `Error occurred, preparing for retry...`,
+            progress: 0 
+          } 
+        });
         continue;
       }
     }
