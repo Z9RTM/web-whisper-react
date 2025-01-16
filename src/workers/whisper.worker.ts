@@ -18,6 +18,11 @@ class WhisperPipeline {
   static processor = null;
   static model = null;
   static isProcessing = false;
+  static processingQueue: { 
+    audio: Float32Array; 
+    resolve: (result: any) => void; 
+    reject: (error: any) => void;
+  }[] = [];
 
   static async getInstance(progressCallback = null) {
     try {
@@ -103,13 +108,39 @@ async function initialize(progressCallback: (data: any) => void) {
   }
 }
 
-async function transcribe(audioData: Float32Array) {
-  if (WhisperPipeline.isProcessing) {
-    throw new Error('Already processing audio');
+async function transcribe(audioData: Float32Array): Promise<any> {
+  return new Promise(async (resolve, reject) => {
+    // キューに追加
+    WhisperPipeline.processingQueue.push({ audio: audioData, resolve, reject });
+    
+    // 既に処理中の場合は待機
+    if (WhisperPipeline.isProcessing) {
+      self.postMessage({
+        type: 'progress',
+        progress: {
+          status: 'Queued for processing...',
+          progress: 0
+        }
+      });
+      return;
+    }
+
+    // キューの処理を開始
+    await processQueue();
+  });
+}
+
+async function processQueue() {
+  if (WhisperPipeline.isProcessing || WhisperPipeline.processingQueue.length === 0) {
+    return;
   }
 
+  WhisperPipeline.isProcessing = true;
+  
   try {
-    WhisperPipeline.isProcessing = true;
+    while (WhisperPipeline.processingQueue.length > 0) {
+      const current = WhisperPipeline.processingQueue[0];
+      try {
     const [tokenizer, processor, model] = await WhisperPipeline.getInstance();
 
     // Storage for chunks and timing info
@@ -177,25 +208,40 @@ async function transcribe(audioData: Float32Array) {
     const outputText = await tokenizer.batch_decode(result, { skip_special_tokens: true });
     const fullText = outputText[0] || chunks.map(chunk => chunk.text).join(' ').trim();
 
+    const result = {
+      text: fullText,
+      chunks,
+      tps
+    };
+        
     self.postMessage({
       type: 'transcribe_complete',
-      result: {
-        text: fullText,
-        chunks,
-        tps
-      }
+      result
     });
+
+    current.resolve(result);
   } catch (error) {
     self.postMessage({
       type: 'error',
       error: error instanceof Error ? error.message : 'Unknown transcription error'
     });
 
+    current.reject(error);
+    
     // Try to cleanup on error
     await WhisperPipeline.cleanup();
   } finally {
-    WhisperPipeline.isProcessing = false;
+    // 現在の処理をキューから削除
+    WhisperPipeline.processingQueue.shift();
   }
+}
+
+// キューに残りがある場合は続けて処理
+if (WhisperPipeline.processingQueue.length > 0) {
+  setTimeout(() => processQueue(), 100); // 少し待ってから次の処理を開始
+}
+
+WhisperPipeline.isProcessing = false;
 }
 
 // Handle incoming messages
