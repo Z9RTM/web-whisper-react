@@ -37,9 +37,14 @@ class WhisperService {
     });
 
     this.worker.onmessage = (event) => {
-      const { type, progress, result, error } = event.data;
+      const { type, progress, result, error, messageType } = event.data;
 
       switch (type) {
+        case 'received':
+          // Message received acknowledgment
+          console.debug(`Worker received message: ${messageType}`);
+          break;
+
         case 'init_complete':
           if (this.progressCallback) {
             this.progressCallback({ status: 'progress', progress: 100 });
@@ -71,6 +76,30 @@ class WhisperService {
             console.error('Worker error:', error);
           }
           break;
+
+        default:
+          console.debug('Unknown message type:', type);
+          break;
+      }
+    };
+
+    // Add error handler for worker
+    this.worker.onerror = (error) => {
+      console.error('Worker error:', error);
+      if (this.currentReject) {
+        this.currentReject(error);
+        this.currentResolve = null;
+        this.currentReject = null;
+      }
+    };
+
+    // Add message error handler
+    this.worker.onmessageerror = (error) => {
+      console.error('Worker message error:', error);
+      if (this.currentReject) {
+        this.currentReject(new Error('Failed to process worker message'));
+        this.currentResolve = null;
+        this.currentReject = null;
       }
     };
 

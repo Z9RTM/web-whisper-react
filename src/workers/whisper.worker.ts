@@ -26,6 +26,14 @@ type TranscribeMessage = {
 
 type WorkerMessage = InitMessage | TranscribeMessage;
 
+type WorkerResponse = {
+  type: 'received' | 'init_complete' | 'progress' | 'transcribe_complete' | 'error';
+  messageType?: string;
+  progress?: { status: string; progress?: number; data?: any };
+  result?: WhisperResult;
+  error?: string;
+};
+
 // Initialize the pipeline
 async function initializePipeline(
   callback: (progress: { status: string; progress?: number }) => void,
@@ -164,24 +172,37 @@ async function processAudio(audioData: Float32Array) {
 }
 
 // Handle incoming messages
-self.onmessage = async (event: MessageEvent<WorkerMessage>) => {
+self.onmessage = (event: MessageEvent<WorkerMessage>) => {
   const { type } = event.data;
 
-  switch (type) {
-    case 'init':
-      await initializePipeline(
-        (progress) => {
-          self.postMessage({ type: 'progress', progress });
-        },
-        event.data.useWebGPU
-      );
-      break;
+  // Immediately acknowledge receipt of the message
+  self.postMessage({ type: 'received', messageType: type });
 
-    case 'transcribe':
-      await processAudio(event.data.audioData);
-      break;
+  // Process the message asynchronously
+  (async () => {
+    try {
+      switch (type) {
+        case 'init':
+          await initializePipeline(
+            (progress) => {
+              self.postMessage({ type: 'progress', progress });
+            },
+            event.data.useWebGPU
+          );
+          break;
 
-    default:
-      self.postMessage({ type: 'error', error: 'Unknown message type' });
-  }
+        case 'transcribe':
+          await processAudio(event.data.audioData);
+          break;
+
+        default:
+          self.postMessage({ type: 'error', error: 'Unknown message type' });
+      }
+    } catch (error) {
+      self.postMessage({ 
+        type: 'error', 
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+  })();
 };
