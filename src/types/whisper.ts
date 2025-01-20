@@ -25,6 +25,20 @@ export interface WhisperResult {
   tps?: number;
 }
 
+export type StatusMessageType = 
+  | "モデルコンポーネントを読み込み中..."
+  | "音声を録音中..."
+  | "文字起こしの準備が完了しました"
+  | "録音開始をお待ちしています"
+  | "Whisperモデルを初期化中...";
+
+export interface ProcessingStatusState {
+  status: StatusMessageType;
+  progress: number;
+  tps?: number;
+  error?: string;
+}
+
 export interface AudioRefs {
   audioContext: AudioContext | null;
   processorNode: AudioWorkletNode | null;
