@@ -8,7 +8,7 @@ import {
 import { WHISPER_CONFIG } from '@/config/whisper';
 import { WhisperResult, WhisperChunk } from '@/types/whisper';
 
-const MODEL_ID = 'onnx-community/whisper-small';
+const MODEL_ID = 'onnx-community/whisper-base';
 
 /**
  * Singleton class for managing the Whisper model and its components
@@ -206,7 +206,7 @@ async function processQueue() {
         });
 
         // Get final text
-        const outputText = await tokenizer.batch_decode(generationResult, { skip_special_tokens: true });
+        const outputText = await tokenizer.batch_decode(generationResult, { skip_prompt: true, skip_special_tokens: true });
         const fullText = outputText[0] || chunks.map(chunk => chunk.text).join(' ').trim();
 
         const result = {
