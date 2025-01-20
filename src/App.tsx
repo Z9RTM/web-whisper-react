@@ -8,15 +8,16 @@ import { useAudioProcessing } from '@/hooks/useAudioProcessing';
 import { STATUS_MESSAGES } from '@/config/whisper';
 import { TranscriptionDisplay } from '@/components/TranscriptionDisplay';
 import { ProcessingStatus } from '@/components/ProcessingStatus';
-import { WhisperChunk } from '@/types/whisper';
+import { WhisperChunk, ProcessingStatusState, StatusMessageType } from '@/types/whisper';
 
 const WhisperBrowserStreaming = () => {
   const [isRecording, setIsRecording] = useState(false);
-  const [chunks, setChunks] = useState<WhisperChunk[]>([]);
-  const [processingStatus, setProcessingStatus] = useState({
-    status: STATUS_MESSAGES.INITIAL,
+  const [currentChunks, setCurrentChunks] = useState<WhisperChunk[]>([]);
+  const [accumulatedChunks, setAccumulatedChunks] = useState<WhisperChunk[]>([]);
+  const [processingStatus, setProcessingStatus] = useState<ProcessingStatusState>({
+    status: STATUS_MESSAGES.INITIAL as StatusMessageType,
     progress: 0,
-    tps: undefined as number | undefined
+    tps: undefined
   });
   
   const { isModelLoaded, status: modelStatus, processAudio } = useWhisperModel();
@@ -27,7 +28,7 @@ const WhisperBrowserStreaming = () => {
         if (progress.status === 'update' && progress.data) {
           const { chunks: newChunks, tps } = progress.data;
           // リアルタイムでチャンクを更新
-          setChunks(prevChunks => {
+          setCurrentChunks(prevChunks => {
             // 新しいチャンクだけを追加または更新
             const updatedChunks = [...prevChunks];
             newChunks.forEach((chunk, index) => {
@@ -42,13 +43,13 @@ const WhisperBrowserStreaming = () => {
 
           setProcessingStatus(prev => ({
             ...prev,
-            status: STATUS_MESSAGES.RECORDING,
+            status: STATUS_MESSAGES.RECORDING as StatusMessageType,
             tps
           }));
         } else {
           setProcessingStatus(prev => ({
             ...prev,
-            status: progress.status,
+            status: progress.status as StatusMessageType,
             progress: progress.progress ?? prev.progress
           }));
         }
@@ -56,10 +57,10 @@ const WhisperBrowserStreaming = () => {
       
       if (result) {
         // 最終結果で完全に更新
-        setChunks(result.chunks);
+        setCurrentChunks(result.chunks);
         setProcessingStatus(prev => ({
           ...prev,
-          status: STATUS_MESSAGES.READY,
+          status: STATUS_MESSAGES.READY as StatusMessageType,
           progress: 100
         }));
       }
@@ -73,10 +74,10 @@ const WhisperBrowserStreaming = () => {
 
   const startRecording = async () => {
     try {
-      // 新しい録音を開始する前に状態をリセット
-      setChunks([]);
+      // 新しい録音を開始する前に現在のチャンクをリセット
+      setCurrentChunks([]);
       setProcessingStatus({
-        status: STATUS_MESSAGES.RECORDING,
+        status: STATUS_MESSAGES.RECORDING as StatusMessageType,
         progress: 0,
         tps: undefined
       });
@@ -86,7 +87,7 @@ const WhisperBrowserStreaming = () => {
       console.error('Failed to start recording:', error);
       setProcessingStatus(prev => ({
         ...prev,
-        status: STATUS_MESSAGES.WAITING,
+        status: STATUS_MESSAGES.WAITING as StatusMessageType,
         error: 'Failed to start recording'
       }));
     }
@@ -95,9 +96,11 @@ const WhisperBrowserStreaming = () => {
   const stopRecording = () => {
     stopAudioProcessing();
     setIsRecording(false);
+    // 現在のチャンクを累積チャンクに追加
+    setAccumulatedChunks(prev => [...prev, ...currentChunks]);
     setProcessingStatus(prev => ({
       ...prev,
-      status: STATUS_MESSAGES.WAITING,
+      status: STATUS_MESSAGES.WAITING as StatusMessageType,
       tps: undefined
     }));
   };
@@ -129,7 +132,7 @@ const WhisperBrowserStreaming = () => {
             tps={processingStatus.tps}
           />
           
-          <div className="flex justify-center gap-4">
+          <div className="flex justify-center gap-4 flex-wrap">
             <Button
               onClick={startRecording}
               disabled={isRecording || !isModelLoaded}
@@ -147,10 +150,19 @@ const WhisperBrowserStreaming = () => {
               <StopCircle className="w-4 h-4" />
               録音停止
             </Button>
+            {accumulatedChunks.length > 0 && (
+              <Button
+                onClick={() => setAccumulatedChunks([])}
+                variant="outline"
+                className="flex items-center gap-2"
+              >
+                履歴をクリア
+              </Button>
+            )}
           </div>
 
           <TranscriptionDisplay
-            chunks={chunks}
+            chunks={[...accumulatedChunks, ...currentChunks]}
             isProcessing={isRecording || processingStatus.status === STATUS_MESSAGES.LOADING}
           />
         </div>
