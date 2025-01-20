@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect } from 'react';
-import { ProcessingStatus, WhisperResult } from '@/types/whisper';
+import { ProcessingStatus, WhisperResult, WhisperStreamUpdate } from '@/types/whisper';
 import { ERROR_MESSAGES, STATUS_MESSAGES } from '@/config/whisper';
 import WhisperService from '@/utils/WhisperService';
 
@@ -39,7 +39,11 @@ export const useWhisperModel = () => {
 
   const processAudio = useCallback(async (
     audioData: Float32Array,
-    progressCallback?: (progress: { status: string; progress?: number; data?: any }) => void
+    progressCallback?: (progress: { 
+      status: string; 
+      progress?: number; 
+      data?: WhisperStreamUpdate 
+    }) => void
   ): Promise<WhisperResult> => {
     if (!isModelLoaded) {
       throw new Error(ERROR_MESSAGES.MODEL_NOT_INITIALIZED);
