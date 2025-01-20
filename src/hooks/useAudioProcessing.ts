@@ -2,7 +2,7 @@ import { useRef, useState, useCallback } from 'react';
 import { AudioRefs, ProcessingStatus, AudioState } from '@/types/whisper';
 import { AUDIO_CONFIG, ERROR_MESSAGES } from '@/config/whisper';
 
-export const useAudioProcessing = (onAudioProcess: (audio: Float32Array, timestamp: number) => Promise<void>) => {
+export const useAudioProcessing = (onAudioProcess: (audio: Float32Array) => Promise<void>) => {
   const [status, setStatus] = useState<ProcessingStatus>({ status: '' });
   const [audioState, setAudioState] = useState<AudioState>('inactive');
   const audioRefs = useRef<AudioRefs>({
@@ -52,7 +52,7 @@ export const useAudioProcessing = (onAudioProcess: (audio: Float32Array, timesta
         const { audio, timestamp } = e.data;
         setAudioState('active'); // 音声データを受信したら active に設定
         const processedAudio = preprocessAudio(audio);
-        await onAudioProcess(processedAudio, timestamp);
+        await onAudioProcess(processedAudio);
         
         // 1秒後に無音状態に戻す（次のデータが来ない場合）
         setTimeout(() => {
